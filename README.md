@@ -1,39 +1,37 @@
-# streaming-bz2-decompress
+# Streaming BZ2 Decompress
 
-## Description
+## Overview
 
-This library allows you to decompress a stream of a bzip2 archive in the browser, no Node.js required.
+This library enables you to decompress a stream of a bzip2 archive directly in the browser. It doesn't require Node.js, making it quite handy for client-side operations.
 
 ## Table of Contents
 
-1. [Installation](#installation)
-2. [Usage](#usage)
-3. [API](#api)
-4. [Example](#example)
-5. [Caveats](#caveats)
-6. [Contributing](#contributing)
-7. [Credits](#credits)
-8. [License](#license)
+- [Installation](#installation)
+- [Usage](#usage)
+- [API](#api)
+- [Example](#example)
+- [Contributing](#contributing)
+- [Caveats](#caveats)
+- [Credits](#credits)
+- [License](#license)
 
 ## Installation
 
-To install the package, run the following command:
+To install the package, you can use npm as follows:
 
-```bash
+\`\`\`bash
 npm i streaming-bz2-decompress
-```
+\`\`\`
 
 ## Usage
 
-After installing, you can use it as follows:
-
-```javascript
-import decompressStream from 'streaming-bz2-decompress';
-```
+The library exposes a single function `decompressStream` which takes care of the decompression process.
 
 ## API
 
-The library exposes only one function:
+### decompressStream
+
+The only function exposed by this library is `decompressStream`.
 
 ```typescript
 declare function decompressStream(
@@ -45,7 +43,7 @@ declare function decompressStream(
 
 ## Example
 
-Here is a quick example to get you started:
+Here is a basic example to demonstrate the usage:
 
 ```javascript
 let total = 0;
@@ -66,26 +64,22 @@ await decompressStream(
 );
 ```
 
-## Caveats
-
-You might need to polyfill `buffer`. You can install it by running:
-
-```bash
-npm i buffer
-```
-
-If you wish to contribute to make this library polyfill `buffer` for the consumer, PRs are welcome.
-
 ## Contributing
 
-Currently, there are no tests for this repository. If you would like to contribute, PRs are welcome.
+- Currently, there are no tests for this repository. PRs are welcome to add tests.
+- If you want to help with polyfilling `buffer`, PRs are welcome.
+
+## Caveats
+
+- You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
 
 ## Credits
 
 This library is based on the following repositories:
-- [openpgpjs/seek-bzip](https://github.com/openpgpjs/seek-bzip)
-- [cscott/seek-bzip](https://github.com/cscott/seek-bzip)
-- [antimatter15/bzip2.js](https://github.com/antimatter15/bzip2.js)
+
+- [seek-bzip by openpgpjs](https://github.com/openpgpjs/seek-bzip)
+- [seek-bzip by cscott](https://github.com/cscott/seek-bzip)
+- [bzip2.js by antimatter15](https://github.com/antimatter15/bzip2.js)
 
 ## License
 
