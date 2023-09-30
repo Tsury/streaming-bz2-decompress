@@ -1,18 +1,22 @@
 import decode from './bunzip.js';
 
-const findSubArray = (arr1: Uint8Array, arr2: Uint8Array) => {
-  for (let i = 0; i <= arr1.length - arr2.length; i++) {
-    // Ensuring there's enough space remaining in arr1 to contain arr2
-    let found = true;
+const findSubArray = (A: Uint8Array, B: Uint8Array): number => {
+  // Check for empty arrays or if B is larger than A
+  if (A.length === 0 || B.length === 0 || B.length > A.length) {
+    return -1;
+  }
 
-    for (let j = 0; j < arr2.length; j++) {
-      if (arr1[i + j] !== arr2[j]) {
-        found = false;
+  for (let i = 0; i <= A.length - B.length; i++) {
+    let match = true;
+
+    for (let j = 0; j < B.length; j++) {
+      if (A[i + j] !== B[j]) {
+        match = false;
         break;
       }
     }
 
-    if (found) {
+    if (match) {
       return i;
     }
   }
