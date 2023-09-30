@@ -34,11 +34,6 @@ class Stream {
     return bytesRead;
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  seek = (_pos: number): void => {
-    throw new Error('abstract method seek() not implemented');
-  };
-
   eof = (): boolean => {
     throw new Error('abstract method eof() not implemented');
   };
@@ -52,16 +47,6 @@ class Stream {
   getBuffer = (): Uint8Array => {
     throw new Error('abstract method getBuffer() not implemented');
   };
-
-  write = (buffer: Uint8Array, bufOffset: number, length: number) => {
-    for (let i = 0; i < length; i++) {
-      this.writeByte(buffer[bufOffset++]);
-    }
-
-    return length;
-  };
-
-  flush = () => {};
 }
 
 export default Stream;

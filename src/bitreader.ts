@@ -51,13 +51,13 @@ class BitReader {
   };
 
   // seek to an arbitrary point in the buffer (expressed in bits)
-  seek = (pos: number) => {
-    const n_bit = pos % 8;
-    const n_byte = (pos - n_bit) / 8;
-    this.bitOffset = n_bit;
-    this.stream.seek(n_byte);
-    this.hasByte = false;
-  };
+  // seek = (pos: number) => {
+  //   const n_bit = pos % 8;
+  //   const n_byte = (pos - n_bit) / 8;
+  //   this.bitOffset = n_bit;
+  //   this.stream.seek(n_byte);
+  //   this.hasByte = false;
+  // };
 
   // reads 6 bytes worth of data using the read method
   pi = () => {

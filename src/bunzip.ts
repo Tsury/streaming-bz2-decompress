@@ -59,27 +59,16 @@ const _throw = (status: number, optDetail?: string) => {
 
 class Bunzip {
   writePos: number;
-
   writeCurrent: number;
-
   writeCount: number;
-
   blockCRC: CRC32;
-
   reader: BitReader;
-
   dbufSize: number;
-
   nextoutput: number;
-
   outputStream: Stream;
-
   streamCRC: number;
-
   targetBlockCRC: number;
-
   dbuf: Uint32Array;
-
   writeRun: number;
 
   constructor(inputStream: Stream, outputStream: Stream) {
@@ -531,10 +520,6 @@ const coerceInputStream = (input: Buffer) => {
 
   inputStream.readByte = function () {
     return input[this.pos++];
-  };
-
-  inputStream.seek = function (pos) {
-    this.pos = pos;
   };
 
   inputStream.eof = function () {

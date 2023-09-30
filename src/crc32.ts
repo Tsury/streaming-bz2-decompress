@@ -47,14 +47,6 @@ class CRC32 {
   };
 
   /**
-   * Update the CRC with a single byte
-   * @param value The value to update the CRC with
-   */
-  updateCRC = (value: number) => {
-    this.crc = (this.crc << 8) ^ crc32Lookup[((this.crc >>> 24) ^ value) & 0xff];
-  };
-
-  /**
    * Update the CRC with a sequence of identical bytes
    * @param value The value to update the CRC with
    * @param count The number of bytes
