@@ -67,6 +67,7 @@ await decompressStream(
 ## Caveats
 
 - You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
+- There's no CRC validation for the entire file at the end - only the per-block ones.
 
 ## Contributing
 
