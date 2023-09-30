@@ -114,8 +114,6 @@ const decompressStream = async (
       }
     }
   } catch (e) {
-    console.log(e);
-
     if (e instanceof Error) {
       onError(e.message);
     } else {
