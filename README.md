@@ -19,9 +19,9 @@ This library enables you to decompress a stream of a bzip2 archive directly in t
 
 To install the package, you can use npm as follows:
 
-\`\`\`bash
+```bash
 npm i streaming-bz2-decompress
-\`\`\`
+```
 
 ## Usage
 
@@ -64,14 +64,14 @@ await decompressStream(
 );
 ```
 
+## Caveats
+
+- You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
+
 ## Contributing
 
 - Currently, there are no tests for this repository. PRs are welcome to add tests.
 - If you want to help with polyfilling `buffer`, PRs are welcome.
-
-## Caveats
-
-- You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
 
 ## Credits
 
