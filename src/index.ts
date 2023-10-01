@@ -1,3 +1,4 @@
+import type { DataCallbackParams } from '../index.js';
 import decode from './bunzip.js';
 
 const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) => {
@@ -22,7 +23,7 @@ const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) =>
 
 const decompressStream = async (
   url: string,
-  onData: (data: { data: Uint8Array; done: boolean }) => void,
+  onData: (data: DataCallbackParams) => void,
   onError: (e: string) => void
 ) => {
   try {
@@ -32,6 +33,9 @@ const decompressStream = async (
       throw Error(`Failed to fetch with status: ${response.statusText || 'unknown'}`);
     }
 
+    const contentLength = response.headers.get('Content-Length');
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : null;
+
     const reader = response.body.getReader();
 
     let chunks: Uint8Array[] = [];
@@ -39,6 +43,7 @@ const decompressStream = async (
     let magic: Uint8Array = new Uint8Array([]);
     let newMagicIndex = -1;
     let compressedData: Buffer;
+    let bytesReceived = 0;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -52,6 +57,8 @@ const decompressStream = async (
         if (!value) {
           throw Error('No value');
         }
+
+        bytesReceived += value.byteLength;
 
         let isFirst = false;
 
@@ -100,7 +107,7 @@ const decompressStream = async (
         throw Error('Failed to decode');
       }
 
-      onData({ data, done });
+      onData({ data, done, progress: totalBytes ? Math.round((bytesReceived / totalBytes) * 100) : undefined });
 
       if (done) {
         break;
