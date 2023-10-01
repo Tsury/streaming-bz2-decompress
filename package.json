@@ -1,7 +1,7 @@
 {
   "name": "streaming-bz2-decompress",
   "author": "Amit Tsur",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "types": "index.d.ts",
   "description": "",
   "main": "dist/index.js",
