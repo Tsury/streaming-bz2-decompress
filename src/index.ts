@@ -1,22 +1,18 @@
 import decode from './bunzip.js';
 
-const findSubArray = (A: Uint8Array, B: Uint8Array): number => {
-  // Check for empty arrays or if B is larger than A
-  if (A.length === 0 || B.length === 0 || B.length > A.length) {
-    return -1;
-  }
+const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) => {
+  for (let i = 0; i <= arr1.length - arr2.length; i++) {
+    // Ensuring there's enough space remaining in arr1 to contain arr2
+    let found = true;
 
-  for (let i = 0; i <= A.length - B.length; i++) {
-    let match = true;
-
-    for (let j = 0; j < B.length; j++) {
-      if (A[i + j] !== B[j]) {
-        match = false;
+    for (let j = 0; j < arr2.length; j++) {
+      if (arr1[i + j] !== arr2[j]) {
+        found = false;
         break;
       }
     }
 
-    if (match) {
+    if (found && (i > 0 || !skipFirst)) {
       return i;
     }
   }
@@ -66,25 +62,22 @@ const decompressStream = async (
           isFirst = true;
         }
 
-        if (isFirst) {
-          // On first block, in case we have 2 magic numbers, skip the first one by adding 1 to the index
-          newMagicIndex = findSubArray(value.slice(1), magic);
-        } else {
-          newMagicIndex = findSubArray(value, magic);
+        // Find the magic number in the current block
+        // If this is the first chunk, we skip the first byte to not match the magic number in the first block
+        newMagicIndex = findSubArray(value, magic, isFirst);
 
-          if (newMagicIndex === -1 && chunks.length > 0) {
-            // If we didn't find the magic number, try to combine the last chunk with the current one
-            // This is to handle the case where the magic number is split between 2 blocks
-            const newValue = new Uint8Array([...Array.from(chunks[chunks.length - 1]), ...Array.from(value)]);
+        if (newMagicIndex === -1 && chunks.length > 0) {
+          // If we didn't find the magic number, try to combine the last chunk with the current one
+          // This is to handle the case where the magic number is split between 2 blocks
+          const newValue = new Uint8Array([...Array.from(chunks[chunks.length - 1]), ...Array.from(value)]);
 
-            // We skip the first byte to not match the magic number in the last block (chunks.length - 1)
-            newMagicIndex = findSubArray(newValue.slice(1), magic);
+          // We skip the first byte to not match the magic number in the last block (chunks.length - 1)
+          newMagicIndex = findSubArray(newValue.slice(1), magic, false);
 
-            if (newMagicIndex !== -1) {
-              // If we found the magic number, replace the last chunk with the new value
-              value = newValue;
-              chunks.pop();
-            }
+          if (newMagicIndex !== -1) {
+            // If we found the magic number, replace the last chunk with the new value
+            value = newValue;
+            chunks.pop();
           }
         }
 
