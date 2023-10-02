@@ -2,7 +2,7 @@
 
 ## Overview
 
-This library enables you to decompress a stream of a bzip2 archive directly in the browser. It doesn't require Node.js, making it quite handy for client-side operations.
+Decompress a bzip2 stream in the browser - no Node.js required.
 
 ## Table of Contents
 
@@ -16,8 +16,6 @@ This library enables you to decompress a stream of a bzip2 archive directly in t
 - [License](#license)
 
 ## Installation
-
-To install the package, you can use npm as follows:
 
 ```bash
 npm i streaming-bz2-decompress
