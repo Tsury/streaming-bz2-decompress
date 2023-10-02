@@ -26,6 +26,11 @@ npm i streaming-bz2-decompress
 ## Usage
 
 The library exposes a single function `decompressStream` which takes care of the decompression process.
+It requires the callbacks `onDecompressed` and `onError` to it in order to pass decompressed data.
+It returns the callbacks `onDataFinished`, `onCompressedData` and `cancel` in order to receive input from the consumer.
+
+use `onCompressedData` to pass compressed data, once whole blocks of BZ2 compressed data are received, they be decompressed and `onDecompressed` will be called with the decompressed data.
+Once finished passing compressed datam use `onDataFinished` to trigger the decompression of any remaining uncompressed data.
 
 ## API
 
@@ -34,17 +39,18 @@ The library exposes a single function `decompressStream` which takes care of the
 The only function exposed by this library is `decompressStream`.
 
 ```typescript
-export interface DataCallbackParams {
-  data: Uint8Array;
-  done: boolean;
-  progress?: number;
+export interface DecompressStreamCallbacks {
+  onDecompressed: (id: number, data: DecompressedCallbackParams) => void;
+  onError: (id: number, e: string) => void;
 }
 
-declare function decompressStream(
-  url: string,
-  onData: (data: DataCallbackParams) => void,
-  onError: (e: string) => void
-): Promise<void>;
+export interface DecompressStreamActions {
+  onDataFinished: () => void;
+  onCompressedData: (data: Uint8Array) => void;
+  cancel: () => void;
+}
+
+declare function decompressStream(callbacks: DecompressStreamCallbacks): void;
 ```
 
 ## Example
@@ -52,37 +58,58 @@ declare function decompressStream(
 Here is a basic example to demonstrate the usage:
 
 ```javascript
-let total = 0;
+let totalReceived = 0;
 
-await decompressStream(
-  'http://url/to/file.bz2',
-  (newData) => {
-    console.log(`Received ${newData.data.length} bytes.` + (newData.progress ? ` Progress: ${newData.progress}%` : ``));
-    total += newData.data.length;
+const decompressionActions = decompressStream({
+  onDecompressed: (id, data) => {
+    totalReceived += data.data.byteLength;
+    console.log('Received data for task ' + id + ': ' + data.data.byteLength);
 
-    if (newData.done) {
-      console.log(`Done. Received a total of ${total} bytes`);
+    if (data.done) {
+      console.log('Task ' + id + 'done. Received: ' + totalReceived);
     }
   },
-  (error) => {
-    console.log(`Error: ${error}`);
+  onError: (id, e) => {
+    console.error('Error for task ' + id + ': ' + e);
   }
-);
+});
 
-// Received 2728509 bytes. Progress: 6%
-// Received 6307939 bytes. Progress: 19%
-// Received 13515059 bytes. Progress: 44%
-// Received 5403683 bytes. Progress: 54%
-// Received 3598647 bytes. Progress: 61%
-// Received 21116892 bytes. Progress: 100%
-// Done. Received a total of 52670729 bytes
+const response = await fetch('http://url/to/file.bz2');
+
+if (!response.ok || !response.body) {
+  throw Error(`Failed to fetch with status: ${response.statusText || 'unknown'}`);
+}
+
+const reader = response.body.getReader();
+
+while (true) {
+  const readRes = await reader.read();
+  const { done, value } = readRes;
+
+  if (done) {
+    decompressionActions.onDataFinished();
+    break;
+  }
+
+  if (!value) {
+    throw Error('No value');
+  }
+
+  decompressionActions.onCompressedData(value);
+}
+
+// Received data for task 0: 2728509
+// Received data for task 0: 6307939
+// Received data for task 0: 13515059
+// Received data for task 0: 5403683
+// Received data for task 0: 3598647
+// Received data for task 0: 21116892
 ```
 
 ## Caveats
 
 - You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
-- There's no CRC validation for the entire file at the end - only the per-block ones.
-- Progress depends on a proper Content-Length header being returned.
+- There's no CRC validation for the entire file at the end - only the per-block ones. There's no proper BZ2 formet eof detection. That's why `onDataFinished` is required.
 
 ## Contributing
 
