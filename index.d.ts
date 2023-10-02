@@ -1,17 +1,14 @@
-export interface DecompressStreamParams {
+export interface DecompressStreamCallbacks {
   onDecompressed: (id: number, data: DecompressedCallbackParams) => void;
   onError: (id: number, e: string) => void;
 }
 
-export interface DataCallbackParams {
-  data: Uint8Array;
-  done: boolean;
+export interface DecompressStreamActions {
+  onDataFinished: () => void;
+  onCompressedData: (data: Uint8Array) => void;
+  cancel: () => void;
 }
 
-declare function decompressStream(
-  url: string,
-  onData: (data: DataCallbackParams) => void,
-  onError: (e: string) => void
-): Promise<void>;
+declare function decompressStream(callbacks: DecompressStreamCallbacks): void;
 
 export default decompressStream;

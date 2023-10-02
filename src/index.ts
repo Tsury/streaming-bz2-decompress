@@ -1,7 +1,7 @@
-import type { DecompressStreamParams } from '../index.js';
+import type { DecompressStreamActions, DecompressStreamCallbacks } from '../index.js';
 import decode from './bunzip.js';
 
-interface DecompressionTask extends DecompressStreamParams {
+interface DecompressionTask extends DecompressStreamCallbacks {
   id: number;
   chunks: Uint8Array[];
   header: Buffer;
@@ -31,7 +31,7 @@ const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) =>
 let currId = 0;
 const decompressionTasks = new Map<number, DecompressionTask>();
 
-const decompressStream = (params: DecompressStreamParams) => {
+const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamActions => {
   const id = currId++;
 
   const task: DecompressionTask = {
