@@ -34,9 +34,15 @@ The library exposes a single function `decompressStream` which takes care of the
 The only function exposed by this library is `decompressStream`.
 
 ```typescript
+export interface DataCallbackParams {
+  data: Uint8Array;
+  done: boolean;
+  progress?: number;
+}
+
 declare function decompressStream(
   url: string,
-  onData: (data: { data: Uint8Array; done: boolean }) => void,
+  onData: (data: DataCallbackParams) => void,
   onError: (e: string) => void
 ): Promise<void>;
 ```
@@ -51,7 +57,7 @@ let total = 0;
 await decompressStream(
   'http://url/to/file.bz2',
   (newData) => {
-    console.log(`Received ${newData.data.length} bytes`);
+    console.log(`Received ${newData.data.length} bytes.` + (newData.progress ? ` Progress: ${newData.progress}%` : ``));
     total += newData.data.length;
 
     if (newData.done) {
@@ -62,12 +68,21 @@ await decompressStream(
     console.log(`Error: ${error}`);
   }
 );
+
+// Received 2728509 bytes. Progress: 6%
+// Received 6307939 bytes. Progress: 19%
+// Received 13515059 bytes. Progress: 44%
+// Received 5403683 bytes. Progress: 54%
+// Received 3598647 bytes. Progress: 61%
+// Received 21116892 bytes. Progress: 100%
+// Done. Received a total of 52670729 bytes
 ```
 
 ## Caveats
 
 - You might need to install a polyfill for `buffer`. You can do so by running `npm i buffer`.
 - There's no CRC validation for the entire file at the end - only the per-block ones.
+- Progress depends on a proper Content-Length header being returned.
 
 ## Contributing
 
