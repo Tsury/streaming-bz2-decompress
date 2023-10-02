@@ -45,15 +45,15 @@ const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamAc
   decompressionTasks.set(id, task);
 
   return {
-    onDataFinished: () => {
+    dataFinished: () => {
       // TODO: If these setTimeouts introduce bugs, I will replace them with a proper queue/worker system
       setTimeout(() => {
-        onCompressedData(id, new Uint8Array(), true);
+        processCompressedData(id, new Uint8Array(), true);
       });
     },
-    onCompressedData: (data: Uint8Array) => {
+    addData: (data: Uint8Array) => {
       setTimeout(() => {
-        onCompressedData(id, data, false);
+        processCompressedData(id, data, false);
       });
     },
     cancel: () => {
@@ -62,7 +62,7 @@ const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamAc
   };
 };
 
-const onCompressedData = (id: number, data: Uint8Array, isDone: boolean) => {
+const processCompressedData = (id: number, data: Uint8Array, isDone: boolean) => {
   const task = decompressionTasks.get(id);
 
   if (!task) {

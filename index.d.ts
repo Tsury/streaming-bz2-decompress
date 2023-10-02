@@ -4,8 +4,8 @@ export interface DecompressStreamCallbacks {
 }
 
 export interface DecompressStreamActions {
-  onDataFinished: () => void;
-  onCompressedData: (data: Uint8Array) => void;
+  dataFinished: () => void;
+  addData: (data: Uint8Array) => void;
   cancel: () => void;
 }
 
