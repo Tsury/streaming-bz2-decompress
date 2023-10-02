@@ -96,12 +96,24 @@ const processCompressedData = (id: number, data: Uint8Array, isDone: boolean) =>
       if (newMagicIndex === -1 && chunks.length > 0) {
         // If we didn't find the magic number, try to combine the last chunk with the current one
         // This is to handle the case where the magic number is split between 2 blocks
-        const newValue = new Uint8Array([...Array.from(chunks[chunks.length - 1]), ...Array.from(data)]);
 
-        // We skip the first byte to not match the magic number in the last block (chunks.length - 1)
-        newMagicIndex = findSubArray(newValue.slice(1), magic, false);
+        const lastChunk = chunks[chunks.length - 1];
+        const newValue = new Uint8Array([...Array.from(lastChunk), ...Array.from(data)]);
+
+        // To optimize, we slice newValue to only contain (magicLength - 1) from each of its parts (the last chunk and the current one)
+        // It will have a final size of (magicLength * 2 - 2)
+        const magicLength = magic.length;
+
+        newMagicIndex = findSubArray(
+          newValue.slice(lastChunk.length - (magicLength - 1), lastChunk.length + (magicLength - 1)),
+          magic,
+          false
+        );
 
         if (newMagicIndex !== -1) {
+          // Fix newMagicIndex to be relative to the beginning of lastChunk
+          newMagicIndex += lastChunk.length - (magicLength - 1);
+
           // If we found the magic number, replace the last chunk with the new value
           data = newValue;
           chunks.pop();
