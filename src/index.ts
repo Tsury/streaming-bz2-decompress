@@ -46,10 +46,15 @@ const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamAc
 
   return {
     onDataFinished: () => {
-      onCompressedData(id, new Uint8Array(), true);
+      // TODO: If these setTimeouts introduce bugs, I will replace them with a proper queue/worker system
+      setTimeout(() => {
+        onCompressedData(id, new Uint8Array(), true);
+      });
     },
     onCompressedData: (data: Uint8Array) => {
-      onCompressedData(id, data, false);
+      setTimeout(() => {
+        onCompressedData(id, data, false);
+      });
     },
     cancel: () => {
       decompressionTasks.delete(id);
