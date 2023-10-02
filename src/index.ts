@@ -4,7 +4,7 @@ import decode from './bunzip.js';
 interface DecompressionTask extends DecompressStreamCallbacks {
   id: number;
   chunks: Uint8Array[];
-  header: Buffer;
+  header: Uint8Array;
   magic: Uint8Array;
 }
 
@@ -83,7 +83,7 @@ const processCompressedData = (id: number, data: Uint8Array, isDone: boolean) =>
       let isFirst = false;
 
       if (!header.length && data.byteLength > 0) {
-        task.header = header = Buffer.from(data).subarray(0, 4);
+        task.header = header = data.slice(0, 4);
         task.magic = magic = data.slice(4, 10);
         data = data.slice(4);
         isFirst = true;
