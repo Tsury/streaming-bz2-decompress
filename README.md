@@ -25,10 +25,10 @@ npm i streaming-bz2-decompress
 
 The library exposes a single function `decompressStream` which takes care of the decompression process.
 It requires the callbacks `onDecompressed` and `onError` to it in order to pass decompressed data.
-It returns the callbacks `onDataFinished`, `onCompressedData` and `cancel` in order to receive input from the consumer.
+It returns the actions `dataFinished`, `addData` and `cancel` in order to receive input from the consumer.
 
-use `onCompressedData` to pass compressed data, once whole blocks of BZ2 compressed data are received, they be decompressed and `onDecompressed` will be called with the decompressed data.
-Once finished passing compressed datam use `onDataFinished` to trigger the decompression of any remaining uncompressed data.
+use `addData` to pass compressed data, once whole blocks of BZ2 compressed data are received, they be decompressed and `onDecompressed` will be called with the decompressed data.
+Once finished passing compressed datam use `dataFinished` to trigger the decompression of any remaining uncompressed data.
 
 ## API
 
@@ -38,17 +38,17 @@ The only function exposed by this library is `decompressStream`.
 
 ```typescript
 export interface DecompressStreamCallbacks {
-  onDecompressed: (id: number, data: DecompressedCallbackParams) => void;
+  onDecompressed: (id: number, data: Uint8Array, done: boolean) => void;
   onError: (id: number, e: string) => void;
 }
 
 export interface DecompressStreamActions {
-  onDataFinished: () => void;
-  onCompressedData: (data: Uint8Array) => void;
+  dataFinished: () => void;
+  addData: (data: Uint8Array) => void;
   cancel: () => void;
 }
 
-declare function decompressStream(callbacks: DecompressStreamCallbacks): void;
+declare function decompressStream(callbacks: DecompressStreamCallbacks): DecompressStreamActions;
 ```
 
 ## Example
@@ -59,11 +59,11 @@ Here is a basic example to demonstrate the usage:
 let totalReceived = 0;
 
 const decompressionActions = decompressStream({
-  onDecompressed: (id, data) => {
-    totalReceived += data.data.byteLength;
-    console.log('Received data for task ' + id + ': ' + data.data.byteLength);
+  onDecompressed: (id, data, done) => {
+    totalReceived += data.byteLength;
+    console.log('Received data for task ' + id + ': ' + data.byteLength);
 
-    if (data.done) {
+    if (done) {
       console.log('Task ' + id + 'done. Received: ' + totalReceived);
     }
   },
@@ -72,7 +72,8 @@ const decompressionActions = decompressStream({
   }
 });
 
-const response = await fetch('http://url/to/file.bz2');
+
+const response = await fetch('http://path/to/file.bz2');
 
 if (!response.ok || !response.body) {
   throw Error(`Failed to fetch with status: ${response.statusText || 'unknown'}`);
@@ -85,7 +86,7 @@ while (true) {
   const { done, value } = readRes;
 
   if (done) {
-    decompressionActions.onDataFinished();
+    decompressionActions.dataFinished();
     break;
   }
 
@@ -93,7 +94,7 @@ while (true) {
     throw Error('No value');
   }
 
-  decompressionActions.onCompressedData(value);
+  decompressionActions.addData(value);
 }
 
 // Received data for task 0: 2728509
