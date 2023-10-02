@@ -9,6 +9,6 @@ export interface DecompressStreamActions {
   cancel: () => void;
 }
 
-declare function decompressStream(callbacks: DecompressStreamCallbacks): void;
+declare function decompressStream(callbacks: DecompressStreamCallbacks): DecompressStreamActions;
 
 export default decompressStream;
