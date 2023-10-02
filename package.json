@@ -3,7 +3,8 @@
   "author": "Amit Tsur",
   "version": "1.0.13",
   "types": "index.d.ts",
-  "description": "",
+  "description": "Decompress a bzip2 stream in the browser - no Node.js required.",
+  "repository": "github:Tsury/streaming-bz2-decompress",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -24,3 +25,4 @@
     "typescript": "^5.2.2"
   }
 }
+
