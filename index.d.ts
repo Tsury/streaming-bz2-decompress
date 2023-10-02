@@ -1,5 +1,5 @@
 export interface DecompressStreamCallbacks {
-  onDecompressed: (id: number, data: Uint8Array) => void;
+  onDecompressed: (id: number, data: Uint8Array, done: boolean) => void;
   onError: (id: number, e: string) => void;
 }
 

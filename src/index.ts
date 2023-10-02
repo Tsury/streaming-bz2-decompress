@@ -127,7 +127,7 @@ const onCompressedData = (id: number, data: Uint8Array, isDone: boolean) => {
     }
 
     // We get the callback in the last second in case the user cancels the task
-    decompressionTasks.get(id)?.onDecompressed(id, res);
+    decompressionTasks.get(id)?.onDecompressed(id, res.data, res.done);
   } catch (e) {
     const onError = decompressionTasks.get(id)?.onError;
 
