@@ -1,5 +1,12 @@
-import type { DataCallbackParams } from '../index.js';
+import type { DecompressStreamParams } from '../index.js';
 import decode from './bunzip.js';
+
+interface DecompressionTask extends DecompressStreamParams {
+  id: number;
+  chunks: Uint8Array[];
+  header: Buffer;
+  magic: Uint8Array;
+}
 
 const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) => {
   for (let i = 0; i <= arr1.length - arr2.length; i++) {
@@ -21,104 +28,117 @@ const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) =>
   return -1;
 };
 
-const decompressStream = async (
-  url: string,
-  onData: (data: DataCallbackParams) => void,
-  onError: (e: string) => void
-) => {
+let currId = 0;
+const decompressionTasks = new Map<number, DecompressionTask>();
+
+const decompressStream = (params: DecompressStreamParams) => {
+  const id = currId++;
+
+  const task: DecompressionTask = {
+    id,
+    ...params,
+    chunks: [],
+    header: Buffer.from([]),
+    magic: new Uint8Array()
+  };
+
+  decompressionTasks.set(id, task);
+
+  return {
+    onDataFinished: () => {
+      onCompressedData(id, new Uint8Array(), true);
+    },
+    onCompressedData: (data: Uint8Array) => {
+      onCompressedData(id, data, false);
+    },
+    cancel: () => {
+      decompressionTasks.delete(id);
+    }
+  };
+};
+
+const onCompressedData = (id: number, data: Uint8Array, isDone: boolean) => {
+  const task = decompressionTasks.get(id);
+
+  if (!task) {
+    throw Error('No task');
+  }
+
   try {
-    const response = await fetch(url);
+    const { chunks } = task;
+    let { header, magic } = task;
 
-    if (!response.ok || !response.body) {
-      throw Error(`Failed to fetch with status: ${response.statusText || 'unknown'}`);
-    }
-
-    const contentLength = response.headers.get('Content-Length');
-    const totalBytes = contentLength ? parseInt(contentLength, 10) : null;
-
-    const reader = response.body.getReader();
-
-    let chunks: Uint8Array[] = [];
-    let header: Buffer = Buffer.from([]);
-    let magic: Uint8Array = new Uint8Array([]);
-    let newMagicIndex = -1;
     let compressedData: Buffer;
-    let bytesReceived = 0;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const readRes = await reader.read();
-      let { value } = readRes;
-      const { done } = readRes;
-
-      if (done) {
-        compressedData = Buffer.concat([header, ...chunks]);
-      } else {
-        if (!value) {
-          throw Error('No value');
-        }
-
-        bytesReceived += value.byteLength;
-
-        let isFirst = false;
-
-        if (!header.length && value.byteLength > 0) {
-          header = Buffer.from(value).subarray(0, 4);
-          magic = value.slice(4, 10);
-          value = value.slice(4);
-          isFirst = true;
-        }
-
-        // Find the magic number in the current block
-        // If this is the first chunk, we skip the first byte to not match the magic number in the first block
-        newMagicIndex = findSubArray(value, magic, isFirst);
-
-        if (newMagicIndex === -1 && chunks.length > 0) {
-          // If we didn't find the magic number, try to combine the last chunk with the current one
-          // This is to handle the case where the magic number is split between 2 blocks
-          const newValue = new Uint8Array([...Array.from(chunks[chunks.length - 1]), ...Array.from(value)]);
-
-          // We skip the first byte to not match the magic number in the last block (chunks.length - 1)
-          newMagicIndex = findSubArray(newValue.slice(1), magic, false);
-
-          if (newMagicIndex !== -1) {
-            // If we found the magic number, replace the last chunk with the new value
-            value = newValue;
-            chunks.pop();
-          }
-        }
-
-        if (newMagicIndex === -1) {
-          chunks.push(value);
-          continue;
-        }
-
-        const newBlockData = value.slice(0, newMagicIndex);
-        const newNextBlockData = value.slice(newMagicIndex);
-
-        compressedData = Buffer.concat([header, ...chunks, newBlockData]) as Buffer;
-
-        chunks = [newNextBlockData];
-      }
-
-      const data = decode(compressedData);
-
-      if (!data) {
-        throw Error('Failed to decode');
-      }
-
-      onData({ data, done, progress: totalBytes ? Math.round((bytesReceived / totalBytes) * 100) : undefined });
-
-      if (done) {
-        break;
-      }
-    }
-  } catch (e) {
-    if (e instanceof Error) {
-      onError(e.message);
+    if (isDone) {
+      // If isDone is true, it means data is empty, just decompress what's left in the chunks
+      compressedData = Buffer.concat([header, ...chunks]);
     } else {
-      onError('Unknown error');
+      let newMagicIndex = -1;
+      let isFirst = false;
+
+      if (!header.length && data.byteLength > 0) {
+        task.header = header = Buffer.from(data).subarray(0, 4);
+        task.magic = magic = data.slice(4, 10);
+        data = data.slice(4);
+        isFirst = true;
+      }
+
+      // Find the magic number in the current block
+      // If this is the first chunk, we skip the first byte to not match the magic number in the first block
+      newMagicIndex = findSubArray(data, magic, isFirst);
+
+      if (newMagicIndex === -1 && chunks.length > 0) {
+        // If we didn't find the magic number, try to combine the last chunk with the current one
+        // This is to handle the case where the magic number is split between 2 blocks
+        const newValue = new Uint8Array([...Array.from(chunks[chunks.length - 1]), ...Array.from(data)]);
+
+        // We skip the first byte to not match the magic number in the last block (chunks.length - 1)
+        newMagicIndex = findSubArray(newValue.slice(1), magic, false);
+
+        if (newMagicIndex !== -1) {
+          // If we found the magic number, replace the last chunk with the new value
+          data = newValue;
+          chunks.pop();
+        }
+      }
+
+      if (newMagicIndex === -1) {
+        chunks.push(data);
+        return;
+      }
+
+      const newBlockData = data.slice(0, newMagicIndex);
+      compressedData = Buffer.concat([header, ...chunks, newBlockData]) as Buffer;
+
+      const newNextBlockData = data.slice(newMagicIndex);
+      task.chunks = [newNextBlockData];
     }
+
+    const res = decode(compressedData, false);
+
+    if (!res) {
+      throw Error('Failed to decode');
+    }
+
+    // We get the callback in the last second in case the user cancels the task
+    decompressionTasks.get(id)?.onDecompressed(id, res);
+  } catch (e) {
+    const onError = decompressionTasks.get(id)?.onError;
+
+    if (!onError) {
+      return;
+    }
+
+    let errStr = '';
+
+    if (e instanceof Error) {
+      errStr = e.message;
+    } else {
+      errStr = String(e);
+    }
+
+    onError(id, errStr);
   }
 };
 

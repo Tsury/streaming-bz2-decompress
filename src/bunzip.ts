@@ -561,12 +561,13 @@ const createOutputStream = () => {
 /* Static helper functions */
 // 'input' can be a stream or a buffer
 // 'output' can be a stream or a buffer or a number (buffer size)
-const decode = (input: Buffer, checkFileCrc = false) => {
+const decode = (input: Buffer, checkFileCrc: boolean) => {
   // make a stream from a buffer, if necessary
   const inputStream = coerceInputStream(input);
   const outputStream = createOutputStream();
 
   const bz = new Bunzip(inputStream, outputStream);
+  let done = false;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -575,6 +576,8 @@ const decode = (input: Buffer, checkFileCrc = false) => {
     if (bz._init_block()) {
       bz._read_bunzip();
     } else {
+      done = true;
+
       if (checkFileCrc) {
         const targetStreamCRC = bz.reader.read(32) >>> 0; // (convert to unsigned)
 
@@ -590,7 +593,7 @@ const decode = (input: Buffer, checkFileCrc = false) => {
     }
   }
 
-  if ('getBuffer' in outputStream) return outputStream.getBuffer();
+  return { data: outputStream.getBuffer(), done };
 };
 
 export default decode;

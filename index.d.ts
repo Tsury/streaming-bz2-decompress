@@ -1,7 +1,11 @@
+export interface DecompressStreamParams {
+  onDecompressed: (id: number, data: DecompressedCallbackParams) => void;
+  onError: (id: number, e: string) => void;
+}
+
 export interface DataCallbackParams {
   data: Uint8Array;
   done: boolean;
-  progress?: number;
 }
 
 declare function decompressStream(
