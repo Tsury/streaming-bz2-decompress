@@ -1,5 +1,6 @@
 import type { DecompressStreamActions, DecompressStreamCallbacks } from '../index.js';
 import decode from './bunzip.js';
+import kmpSearch from './kmpSearch.js';
 
 interface DecompressionTask extends DecompressStreamCallbacks {
   id: number;
@@ -7,26 +8,6 @@ interface DecompressionTask extends DecompressStreamCallbacks {
   header: Uint8Array;
   magic: Uint8Array;
 }
-
-const findSubArray = (arr1: Uint8Array, arr2: Uint8Array, skipFirst: boolean) => {
-  for (let i = 0; i <= arr1.length - arr2.length; i++) {
-    // Ensuring there's enough space remaining in arr1 to contain arr2
-    let found = true;
-
-    for (let j = 0; j < arr2.length; j++) {
-      if (arr1[i + j] !== arr2[j]) {
-        found = false;
-        break;
-      }
-    }
-
-    if (found && (i > 0 || !skipFirst)) {
-      return i;
-    }
-  }
-
-  return -1;
-};
 
 let currId = 0;
 const decompressionTasks = new Map<number, DecompressionTask>();
@@ -44,17 +25,14 @@ const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamAc
 
   decompressionTasks.set(id, task);
 
+  // TODO: Consider adding some queueing mechanism to avoid blocking the main thread
+  // (setTimeout?)
   return {
     dataFinished: () => {
-      // TODO: If these setTimeouts introduce bugs, I will replace them with a proper queue/worker system
-      setTimeout(() => {
-        processCompressedData(id, new Uint8Array(), true);
-      });
+      processCompressedData(id, new Uint8Array(), true);
     },
     addData: (data: Uint8Array) => {
-      setTimeout(() => {
-        processCompressedData(id, data, false);
-      });
+      processCompressedData(id, data, false);
     },
     cancel: () => {
       decompressionTasks.delete(id);
@@ -91,26 +69,27 @@ const processCompressedData = (id: number, data: Uint8Array, isDone: boolean) =>
 
       // Find the magic number in the current block
       // If this is the first chunk, we skip the first byte to not match the magic number in the first block
-      newMagicIndex = findSubArray(data, magic, isFirst);
+      newMagicIndex = kmpSearch(data, magic, isFirst);
 
       if (newMagicIndex === -1 && chunks.length > 0) {
         // If we didn't find the magic number, try to combine the last chunk with the current one
         // This is to handle the case where the magic number is split between 2 blocks
-
-        const lastChunk = chunks[chunks.length - 1];
-        const newValue = new Uint8Array([...Array.from(lastChunk), ...Array.from(data)]);
-
-        // To optimize, we slice newValue to only contain (magicLength - 1) from each of its parts (the last chunk and the current one)
-        // It will have a final size of (magicLength * 2 - 2)
         const magicLength = magic.length;
+        const lastChunk = chunks[chunks.length - 1];
 
-        newMagicIndex = findSubArray(
-          newValue.slice(lastChunk.length - (magicLength - 1), lastChunk.length + (magicLength - 1)),
-          magic,
-          false
-        );
+        // To optimize, we slice potentialMagicData to only contain (magicLength - 1) from each of its parts (the last chunk and the current one)
+        // It will have a final size of (magicLength * 2 - 2)
+        const potentialMagicData = new Uint8Array([
+          ...Array.from(lastChunk.slice(lastChunk.length - (magicLength - 1))),
+          ...Array.from(data.slice(0, magicLength - 1))
+        ]);
+
+        newMagicIndex = kmpSearch(potentialMagicData, magic, false);
 
         if (newMagicIndex !== -1) {
+          // Concat the last chunk with the current one
+          const newValue = new Uint8Array([...Array.from(lastChunk), ...Array.from(data)]);
+
           // Fix newMagicIndex to be relative to the beginning of lastChunk
           newMagicIndex += lastChunk.length - (magicLength - 1);
 
