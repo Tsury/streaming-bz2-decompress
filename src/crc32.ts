@@ -42,21 +42,20 @@ class CRC32 {
   /**
    * @return The current CRC
    */
-  getCRC = () => {
+  getCRC() {
     return ~this.crc >>> 0; // return an unsigned value
-  };
+  }
 
   /**
    * Update the CRC with a sequence of identical bytes
    * @param value The value to update the CRC with
    * @param count The number of bytes
    */
-  updateCRCRun = (value: number, count: number) => {
+  updateCRCRun(value: number, count: number) {
     while (count-- > 0) {
       this.crc = (this.crc << 8) ^ crc32Lookup[((this.crc >>> 24) ^ value) & 0xff];
     }
-  };
+  }
 }
 
 export default CRC32;
-

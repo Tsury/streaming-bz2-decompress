@@ -1,77 +1,48 @@
-import Stream from './stream.js';
+const BITMASK = new Uint32Array(32);
 
-const BITMASK = [0x00, 0x01, 0x03, 0x07, 0x0f, 0x1f, 0x3f, 0x7f, 0xff];
-
-class BitReader {
-  stream: Stream;
-  bitOffset: number;
-  curByte: number;
-  hasByte: boolean;
-
-  // offset in bytes
-  constructor(stream: Stream) {
-    this.stream = stream;
-    this.bitOffset = 0;
-    this.curByte = 0;
-    this.hasByte = false;
-  }
-
-  _ensureByte = () => {
-    if (!this.hasByte) {
-      this.curByte = this.stream.readByte();
-      this.hasByte = true;
-    }
-  };
-
-  // reads bits from the buffer
-  read = (bits: number) => {
-    let result = 0;
-
-    while (bits > 0) {
-      this._ensureByte();
-      const remaining = 8 - this.bitOffset;
-
-      // if we're in a byte
-      if (bits >= remaining) {
-        result <<= remaining;
-        result |= BITMASK[remaining] & this.curByte;
-        this.hasByte = false;
-        this.bitOffset = 0;
-        bits -= remaining;
-      } else {
-        result <<= bits;
-        const shift = remaining - bits;
-        result |= (this.curByte & (BITMASK[bits] << shift)) >> shift;
-        this.bitOffset += bits;
-        bits = 0;
-      }
-    }
-
-    return result;
-  };
-
-  // seek to an arbitrary point in the buffer (expressed in bits)
-  // seek = (pos: number) => {
-  //   const n_bit = pos % 8;
-  //   const n_byte = (pos - n_bit) / 8;
-  //   this.bitOffset = n_bit;
-  //   this.stream.seek(n_byte);
-  //   this.hasByte = false;
-  // };
-
-  // reads 6 bytes worth of data using the read method
-  pi = () => {
-    const buf = new Uint8Array(6);
-
-    for (let i = 0; i < buf.length; i++) {
-      buf[i] = this.read(8);
-    }
-
-    return bufToHex(buf);
-  };
+for (let i = 0; i < BITMASK.length; i++) {
+  BITMASK[i] = 2 ** i - 1;
 }
 
-const bufToHex = (buf: Uint8Array) => Array.prototype.map.call(buf, (x) => ('00' + x.toString(16)).slice(-2)).join('');
+class BitReader {
+  input: Uint8Array;
+  pos: number;
+  bitBuffer: number;
+  bitCount: number;
+
+  // offset in bytes
+  constructor(input: Uint8Array, pos: number) {
+    this.input = input;
+    this.pos = pos;
+    this.bitBuffer = 0;
+    this.bitCount = 0;
+  }
+
+  // reads bits from the buffer
+  read(bits: number): number {
+    if (bits === 32) {
+      return ((this.read(16) << 16) | this.read(16)) >>> 0;
+    }
+
+    while (this.bitCount < bits) {
+      this.bitBuffer = ((this.bitBuffer << 8) | this.input[this.pos++]) >>> 0;
+      this.bitCount += 8;
+    }
+
+    this.bitCount -= bits;
+    const result = (this.bitBuffer >>> this.bitCount) & BITMASK[bits];
+    this.bitBuffer &= BITMASK[this.bitCount];
+    return result;
+  }
+
+  eof() {
+    return this.bitCount === 0 && this.pos >= this.input.length;
+  }
+
+  // reads 6 bytes worth of data using the read method
+  pi() {
+    return this.read(24) * 0x1000000 + this.read(24);
+  }
+}
 
 export default BitReader;
-

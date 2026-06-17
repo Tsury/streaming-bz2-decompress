@@ -10,11 +10,15 @@ const MIN_GROUPS = 2;
 const MAX_GROUPS = 6;
 const GROUP_SIZE = 50;
 
-const WHOLEPI = '314159265359';
-const SQRTPI = '177245385090';
+const WHOLEPI = 0x314159265359;
+const SQRTPI = 0x177245385090;
 
 const mtf = (array: Uint8Array, index: number) => {
   const src = array[index];
+
+  if (index === 0) {
+    return src;
+  }
 
   for (let i = index; i > 0; i--) {
     array[i] = array[i - 1];
@@ -70,8 +74,9 @@ class Bunzip {
   targetBlockCRC: number;
   dbuf: Uint32Array;
   writeRun: number;
+  input: Buffer;
 
-  constructor(inputStream: Stream, outputStream: Stream) {
+  constructor(input: Buffer, outputStream: Stream) {
     this.nextoutput =
       this.targetBlockCRC =
       this.writeRun =
@@ -84,12 +89,13 @@ class Bunzip {
     this.dbuf = new Uint32Array(0);
     this.blockCRC = new CRC32();
     this.outputStream = outputStream;
-    this.reader = new BitReader(inputStream);
+    this.input = input;
+    this.reader = new BitReader(input, 0);
 
-    this._start_bunzip(inputStream, outputStream);
+    this._start_bunzip(outputStream);
   }
 
-  _init_block = () => {
+  _init_block() {
     const moreBlocks = this._get_next_block();
 
     if (!moreBlocks) {
@@ -99,19 +105,19 @@ class Bunzip {
 
     this.blockCRC = new CRC32();
     return true;
-  };
+  }
 
   /* XXX micro-bunzip uses (inputStream, inputBuffer, len) as arguments */
-  _start_bunzip = (inputStream: Stream, outputStream: Stream) => {
+  _start_bunzip(outputStream: Stream) {
     /* Ensure that file starts with "BZh['1'-'9']." */
-    const buf = new Uint8Array(4);
-    if (inputStream.read(buf, 0, 4) !== 4 || String.fromCharCode(buf[0], buf[1], buf[2]) !== 'BZh')
+    const input = this.input;
+    if (input.length < 4 || input[0] !== 0x42 || input[1] !== 0x5a || input[2] !== 0x68)
       _throw(Err.NOT_BZIP_DATA, 'bad magic');
 
-    const level = buf[3] - 0x30;
+    const level = input[3] - 0x30;
     if (level < 1 || level > 9) _throw(Err.NOT_BZIP_DATA, 'level out of range');
 
-    this.reader = new BitReader(inputStream);
+    this.reader = new BitReader(input, 4);
 
     /* Fourth byte (ascii '1'-'9'), indicates block size in units of 100k of
      uncompressed data.  Allocate intermediate buffer for block. */
@@ -119,9 +125,9 @@ class Bunzip {
     this.nextoutput = 0;
     this.outputStream = outputStream;
     this.streamCRC = 0;
-  };
+  }
 
-  _get_next_block = () => {
+  _get_next_block() {
     let i, j, k;
     const reader = this.reader;
 
@@ -443,7 +449,7 @@ class Bunzip {
     this.writeRun = run;
 
     return true; /* more blocks to come */
-  };
+  }
 
   /* Undo burrows-wheeler transform on intermediate buffer to produce output.
    If start_bunzip was initialized with out_fd=-1, then up to len bytes of
@@ -451,7 +457,7 @@ class Bunzip {
    error (all errors are negative numbers).  If out_fd!=-1, outbuf and len
    are ignored, data is written to out_fd and return is RETVAL_OK or error.
 */
-  _read_bunzip = () => {
+  _read_bunzip() {
     let copies, previous, outbyte;
 
     /* james@jamestaylor.org: writeCount goes to -1 when the buffer is fully
@@ -468,6 +474,9 @@ class Bunzip {
     const dbuf = this.dbuf;
     let dbufCount = this.writeCount;
     let run = this.writeRun;
+    const outputStream = this.outputStream;
+    let outputBuffer = outputStream.buffer;
+    let outputPos = outputStream.pos;
 
     while (dbufCount) {
       dbufCount--;
@@ -487,15 +496,32 @@ class Bunzip {
 
       this.blockCRC.updateCRCRun(outbyte, copies);
 
-      while (copies--) {
-        this.outputStream.writeByte(outbyte);
-        this.nextoutput++;
+      const copyCount = copies;
+
+      if (outputPos + copyCount > outputBuffer.length) {
+        let nextLength = outputBuffer.length;
+
+        while (outputPos + copyCount > nextLength) {
+          nextLength *= 2;
+        }
+
+        const newBuffer = new Uint8Array(nextLength);
+        newBuffer.set(outputBuffer);
+        outputBuffer = newBuffer;
+        outputStream.buffer = outputBuffer;
       }
+
+      while (copies--) {
+        outputBuffer[outputPos++] = outbyte;
+      }
+
+      this.nextoutput += copyCount;
 
       if (current != previous) run = 0;
     }
 
     this.writeCount = dbufCount;
+    outputStream.pos = outputPos;
 
     // check CRC
     if (this.blockCRC.getCRC() !== this.targetBlockCRC) {
@@ -511,27 +537,12 @@ class Bunzip {
     }
 
     return this.nextoutput;
-  };
+  }
 }
-
-const coerceInputStream = (input: Buffer) => {
-  const inputStream = new Stream();
-  inputStream.pos = 0;
-
-  inputStream.readByte = function () {
-    return input[this.pos++];
-  };
-
-  inputStream.eof = function () {
-    return this.pos >= input.length;
-  };
-
-  return inputStream;
-};
 
 const createOutputStream = () => {
   const outputStream = new Stream();
-  outputStream.buffer = new Uint8Array(16384);
+  outputStream.buffer = new Uint8Array(1024 * 1024);
   outputStream.pos = 0;
 
   outputStream.writeByte = function (_byte) {
@@ -563,15 +574,14 @@ const createOutputStream = () => {
 // 'output' can be a stream or a buffer or a number (buffer size)
 const decode = (input: Buffer, checkFileCrc: boolean) => {
   // make a stream from a buffer, if necessary
-  const inputStream = coerceInputStream(input);
   const outputStream = createOutputStream();
 
-  const bz = new Bunzip(inputStream, outputStream);
+  const bz = new Bunzip(input, outputStream);
   let done = false;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if ('eof' in inputStream && inputStream.eof()) break;
+    if (bz.reader.eof()) break;
 
     if (bz._init_block()) {
       bz._read_bunzip();
@@ -597,4 +607,3 @@ const decode = (input: Buffer, checkFileCrc: boolean) => {
 };
 
 export default decode;
-

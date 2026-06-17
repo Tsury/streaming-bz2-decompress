@@ -1,11 +1,13 @@
+export type Awaitable<T> = T | Promise<T>;
+
 export interface DecompressStreamCallbacks {
-  onDecompressed: (id: number, data: Uint8Array, done: boolean) => void;
-  onError: (id: number, e: string) => void;
+  onDecompressed: (id: number, data: Uint8Array, done: boolean) => Awaitable<void>;
+  onError: (id: number, e: string) => Awaitable<void>;
 }
 
 export interface DecompressStreamActions {
-  dataFinished: () => void;
-  addData: (data: Uint8Array) => void;
+  dataFinished: () => Promise<void>;
+  addData: (data: Uint8Array) => Promise<void>;
   cancel: () => void;
 }
 

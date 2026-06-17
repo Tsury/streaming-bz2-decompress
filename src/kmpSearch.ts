@@ -1,4 +1,4 @@
-const buildKmpTable = (pattern: Uint8Array) => {
+export const buildKmpTable = (pattern: Uint8Array) => {
   const table = new Array<number>(pattern.length).fill(0);
   let j = 0;
 
@@ -15,8 +15,7 @@ const buildKmpTable = (pattern: Uint8Array) => {
   return table;
 };
 
-const kmpSearch = (text: Uint8Array, pattern: Uint8Array, skipFirst: boolean) => {
-  const table = buildKmpTable(pattern);
+const kmpSearch = (text: Uint8Array, pattern: Uint8Array, table: number[], skipFirst: boolean) => {
   let j = 0;
   let firstMatchSkipped = false;
 

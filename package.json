@@ -1,15 +1,23 @@
 {
   "name": "streaming-bz2-decompress",
   "author": "Amit Tsur",
-  "version": "1.0.20",
+  "version": "2.0.0",
   "types": "index.d.ts",
   "description": "Decompress a bzip2 stream in the browser - no Node.js required.",
   "repository": "github:Tsury/streaming-bz2-decompress",
   "main": "dist/index.js",
+  "files": [
+    "CHANGELOG.md",
+    "dist",
+    "index.d.ts",
+    "LICENSE",
+    "README.md"
+  ],
   "type": "module",
   "scripts": {
+    "bench": "node scripts/bench.mjs",
     "build": "tsc",
-    "postinstall": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "bz2",
