@@ -1,4 +1,4 @@
-const BITMASK = new Uint32Array(32);
+export const BITMASK = new Uint32Array(32);
 
 for (let i = 0; i < BITMASK.length; i++) {
   BITMASK[i] = 2 ** i - 1;

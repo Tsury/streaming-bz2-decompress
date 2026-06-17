@@ -1,28 +1,76 @@
-import BitReader from './bitreader.js';
+import BitReader, { BITMASK } from './bitreader.js';
 import Stream from './stream.js';
 import CRC32 from './crc32.js';
 
 const MAX_HUFCODE_BITS = 20;
 const MAX_SYMBOLS = 258;
+const HUFFMAN_FAST_BITS = 15;
+const HUFFMAN_FAST_SIZE = 1 << HUFFMAN_FAST_BITS;
 const SYMBOL_RUNA = 0;
 const SYMBOL_RUNB = 1;
 const MIN_GROUPS = 2;
 const MAX_GROUPS = 6;
 const GROUP_SIZE = 50;
+interface HuffmanGroup {
+  permute: Uint16Array;
+  limit: Uint32Array;
+  base: Uint32Array;
+  minLen: number;
+  maxLen: number;
+  fastSymbol: Uint16Array;
+  fastLength: Uint8Array;
+}
 
 const WHOLEPI = 0x314159265359;
 const SQRTPI = 0x177245385090;
 
-const mtf = (array: Uint8Array, index: number) => {
+const mtfSelector = (array: number[], index: number) => {
   const src = array[index];
 
   if (index === 0) {
     return src;
   }
 
-  for (let i = index; i > 0; i--) {
-    array[i] = array[i - 1];
+  switch (index) {
+    case 1:
+      array[1] = array[0];
+      break;
+    case 2:
+      array[2] = array[1];
+      array[1] = array[0];
+      break;
+    case 3:
+      array[3] = array[2];
+      array[2] = array[1];
+      array[1] = array[0];
+      break;
+    case 4:
+      array[4] = array[3];
+      array[3] = array[2];
+      array[2] = array[1];
+      array[1] = array[0];
+      break;
+
+    default:
+      for (let i = index; i > 0; i--) {
+        array[i] = array[i - 1];
+      }
   }
+
+  array[0] = src;
+  return src;
+};
+
+const mtfData = (array: number[], index: number) => {
+  const src = array[index];
+
+  if (index === 0) {
+    return src;
+  }
+
+  do {
+    array[index] = array[index - 1];
+  } while (--index > 0);
 
   array[0] = src;
   return src;
@@ -74,9 +122,9 @@ class Bunzip {
   targetBlockCRC: number;
   dbuf: Uint32Array;
   writeRun: number;
-  input: Buffer;
+  input: Uint8Array;
 
-  constructor(input: Buffer, outputStream: Stream) {
+  constructor(input: Uint8Array, outputStream: Stream) {
     this.nextoutput =
       this.targetBlockCRC =
       this.writeRun =
@@ -136,76 +184,106 @@ class Bunzip {
       return;
     }
 
+    const input = reader.input;
+    let inputPos = reader.pos;
+    let bitBuffer = reader.bitBuffer;
+    let bitCount = reader.bitCount;
+
+    const readBits = (bits: number): number => {
+      if (bits === 32) {
+        return ((readBits(16) << 16) | readBits(16)) >>> 0;
+      }
+
+      while (bitCount < bits) {
+        bitBuffer = ((bitBuffer << 8) | input[inputPos++]) >>> 0;
+        bitCount += 8;
+      }
+
+      bitCount -= bits;
+      const result = bitBuffer >>> bitCount;
+      bitBuffer &= BITMASK[bitCount];
+      return result & BITMASK[bits];
+    };
+
+    const syncReader = () => {
+      reader.pos = inputPos;
+      reader.bitBuffer = bitBuffer;
+      reader.bitCount = bitCount;
+    };
+
     // this is get_next_block() function from micro-bunzip:
     /* Read in header signature and CRC, then validate signature.
      (last block signature means CRC is for whole file, return now) */
-    const h = reader.pi();
+    const h = readBits(24) * 0x1000000 + readBits(24);
 
     if (h === SQRTPI) {
       // last block
+      syncReader();
       return false; /* no more blocks */
     }
 
     if (h !== WHOLEPI) _throw(Err.NOT_BZIP_DATA);
-    this.targetBlockCRC = reader.read(32) >>> 0; // (convert to unsigned)
+    this.targetBlockCRC = readBits(32) >>> 0; // (convert to unsigned)
     this.streamCRC = (this.targetBlockCRC ^ ((this.streamCRC << 1) | (this.streamCRC >>> 31))) >>> 0;
     /* We can add support for blockRandomised if anybody complains.  There was
      some code for this in busybox 1.0.0-pre3, but nobody ever noticed that
      it didn't actually work. */
-    if (reader.read(1)) _throw(Err.OBSOLETE_INPUT);
-    const origPointer = reader.read(24);
+    if (readBits(1)) _throw(Err.OBSOLETE_INPUT);
+    const origPointer = readBits(24);
     if (origPointer > this.dbufSize) _throw(Err.DATA_ERROR, 'initial position out of bounds');
     /* mapping table: if some byte values are never used (encoding things
      like ascii text), the compression code removes the gaps to have fewer
      symbols to deal with, and writes a sparse bitfield indicating which
      values were present.  We make a translation table to convert the symbols
      back to the corresponding bytes. */
-    let t = reader.read(16);
+    let t = readBits(16);
     const symToByte = new Uint8Array(256);
     let symTotal = 0;
 
     for (i = 0; i < 16; i++) {
       if (t & (1 << (0xf - i))) {
         const o = i * 16;
-        k = reader.read(16);
+        k = readBits(16);
         for (j = 0; j < 16; j++) if (k & (1 << (0xf - j))) symToByte[symTotal++] = o + j;
       }
     }
 
     /* How many different huffman coding groups does this block use? */
-    const groupCount = reader.read(3);
+    const groupCount = readBits(3);
     if (groupCount < MIN_GROUPS || groupCount > MAX_GROUPS) _throw(Err.DATA_ERROR);
     /* nSelectors: Every GROUP_SIZE many symbols we select a new huffman coding
      group.  Read in the group selector list, which is stored as MTF encoded
      bit runs.  (MTF=Move To Front, as each value is used it's moved to the
      start of the list.) */
-    const nSelectors = reader.read(15);
+    const nSelectors = readBits(15);
     if (nSelectors === 0) _throw(Err.DATA_ERROR);
 
-    const mtfSymbol = new Uint8Array(256);
+    const mtfSymbol = new Array<number>(256);
     for (i = 0; i < groupCount; i++) mtfSymbol[i] = i;
 
     const selectors = new Uint8Array(nSelectors); // was 32768...
 
     for (i = 0; i < nSelectors; i++) {
       /* Get next value */
-      for (j = 0; reader.read(1); j++) if (j >= groupCount) _throw(Err.DATA_ERROR);
+      for (j = 0; readBits(1); j++) if (j >= groupCount) _throw(Err.DATA_ERROR);
       /* Decode MTF to get the next selector */
-      selectors[i] = mtf(mtfSymbol, j);
+      selectors[i] = mtfSelector(mtfSymbol, j);
     }
 
     /* Read the huffman coding tables for each group, which code for symTotal
      literal symbols, plus two run symbols (RUNA, RUNB) */
     let symCount = symTotal + 2;
 
-    const groups = [];
+    const groups: HuffmanGroup[] = [];
 
-    let hufGroup = {
+    let hufGroup: HuffmanGroup = {
       permute: new Uint16Array(0),
       limit: new Uint32Array(0),
       base: new Uint32Array(0),
       minLen: 0,
-      maxLen: 0
+      maxLen: 0,
+      fastSymbol: new Uint16Array(0),
+      fastLength: new Uint8Array(0)
     };
 
     for (j = 0; j < groupCount; j++) {
@@ -214,15 +292,15 @@ class Bunzip {
       /* Read huffman code lengths for each symbol.  They're stored in
        a way similar to mtf; record a starting value for the first symbol,
        and an offset from the previous value for everys symbol after that. */
-      t = reader.read(5); // lengths
+      t = readBits(5); // lengths
 
       for (i = 0; i < symCount; i++) {
         for (;;) {
           if (t < 1 || t > MAX_HUFCODE_BITS) _throw(Err.DATA_ERROR);
           /* If first bit is 0, stop.  Else second bit indicates whether
            to increment or decrement the value. */
-          if (!reader.read(1)) break;
-          if (!reader.read(1)) t++;
+          if (!readBits(1)) break;
+          if (!readBits(1)) t++;
           else t--;
         }
 
@@ -254,7 +332,9 @@ class Bunzip {
         limit: new Uint32Array(MAX_HUFCODE_BITS + 2),
         base: new Uint32Array(MAX_HUFCODE_BITS + 1),
         minLen: minLen,
-        maxLen: maxLen
+        maxLen: maxLen,
+        fastSymbol: new Uint16Array(HUFFMAN_FAST_SIZE),
+        fastLength: new Uint8Array(HUFFMAN_FAST_SIZE)
       };
 
       groups.push(hufGroup);
@@ -291,6 +371,26 @@ class Bunzip {
       hufGroup.limit[maxLen + 1] = Number.MAX_VALUE; /* Sentinal value for reading next sym. */
       hufGroup.limit[maxLen] = pp + temp[maxLen] - 1;
       hufGroup.base[minLen] = 0;
+
+      let symbolOffset = 0;
+
+      for (let len = minLen; len <= Math.min(maxLen, HUFFMAN_FAST_BITS); len++) {
+        const count = temp[len];
+        const base = hufGroup.base[len] + symbolOffset;
+        const repeats = 1 << (HUFFMAN_FAST_BITS - len);
+
+        for (let code = base, limit = base + count; code < limit; code++) {
+          const start = code << (HUFFMAN_FAST_BITS - len);
+          const symbol = hufGroup.permute[symbolOffset + code - base];
+
+          for (let prefix = start, end = start + repeats; prefix < end; prefix++) {
+            hufGroup.fastSymbol[prefix] = symbol;
+            hufGroup.fastLength[prefix] = len;
+          }
+        }
+
+        symbolOffset += count;
+      }
     }
     /* We've finished reading and digesting the block header.  Now read this
      block's huffman coded symbols from the file and undo the huffman coding
@@ -320,26 +420,46 @@ class Bunzip {
       }
 
       /* Read next huffman-coded symbol. */
-      i = hufGroup.minLen;
-      j = reader.read(i);
+      let nextSym = -1;
 
-      for (; ; i++) {
-        if (i > hufGroup.maxLen) {
+      if (inputPos + 2 <= input.length) {
+        while (bitCount < HUFFMAN_FAST_BITS) {
+          bitBuffer = ((bitBuffer << 8) | input[inputPos++]) >>> 0;
+          bitCount += 8;
+        }
+
+        const bits = (bitBuffer >>> (bitCount - HUFFMAN_FAST_BITS)) & BITMASK[HUFFMAN_FAST_BITS];
+        i = hufGroup.fastLength[bits];
+
+        if (i) {
+          bitCount -= i;
+          bitBuffer &= BITMASK[bitCount];
+          nextSym = hufGroup.fastSymbol[bits];
+        }
+      }
+
+      if (nextSym < 0) {
+        i = hufGroup.minLen;
+        j = readBits(i);
+
+        for (; ; i++) {
+          if (i > hufGroup.maxLen) {
+            _throw(Err.DATA_ERROR);
+          }
+
+          if (j <= hufGroup.limit[i]) break;
+          j = (j << 1) | readBits(1);
+        }
+
+        /* Huffman decode value to get nextSym (with bounds checking) */
+        j -= hufGroup.base[i];
+
+        if (j < 0 || j >= MAX_SYMBOLS) {
           _throw(Err.DATA_ERROR);
         }
 
-        if (j <= hufGroup.limit[i]) break;
-        j = (j << 1) | reader.read(1);
+        nextSym = hufGroup.permute[j];
       }
-
-      /* Huffman decode value to get nextSym (with bounds checking) */
-      j -= hufGroup.base[i];
-
-      if (j < 0 || j >= MAX_SYMBOLS) {
-        _throw(Err.DATA_ERROR);
-      }
-
-      const nextSym = hufGroup.permute[j];
 
       /* We have now decoded the symbol, which indicates either a new literal
        byte, or a repeated run of the most recent literal byte.  First,
@@ -396,7 +516,7 @@ class Bunzip {
       }
 
       i = nextSym - 1;
-      uc = mtf(mtfSymbol, i);
+      uc = mtfData(mtfSymbol, i);
       uc = symToByte[uc];
       /* We have our literal byte.  Save it into dbuf. */
       byteCount[uc]++;
@@ -447,6 +567,7 @@ class Bunzip {
     this.writeCurrent = current;
     this.writeCount = dbufCount;
     this.writeRun = run;
+    syncReader();
 
     return true; /* more blocks to come */
   }
@@ -477,6 +598,7 @@ class Bunzip {
     const outputStream = this.outputStream;
     let outputBuffer = outputStream.buffer;
     let outputPos = outputStream.pos;
+    let nextoutput = this.nextoutput;
 
     while (dbufCount) {
       dbufCount--;
@@ -515,13 +637,14 @@ class Bunzip {
         outputBuffer[outputPos++] = outbyte;
       }
 
-      this.nextoutput += copyCount;
+      nextoutput += copyCount;
 
       if (current != previous) run = 0;
     }
 
     this.writeCount = dbufCount;
     outputStream.pos = outputPos;
+    this.nextoutput = nextoutput;
 
     // check CRC
     if (this.blockCRC.getCRC() !== this.targetBlockCRC) {
@@ -536,7 +659,7 @@ class Bunzip {
       );
     }
 
-    return this.nextoutput;
+    return nextoutput;
   }
 }
 
@@ -572,7 +695,7 @@ const createOutputStream = () => {
 /* Static helper functions */
 // 'input' can be a stream or a buffer
 // 'output' can be a stream or a buffer or a number (buffer size)
-const decode = (input: Buffer, checkFileCrc: boolean) => {
+const decode = (input: Uint8Array, checkFileCrc: boolean) => {
   // make a stream from a buffer, if necessary
   const outputStream = createOutputStream();
 

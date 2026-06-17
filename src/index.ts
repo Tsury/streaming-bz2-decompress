@@ -1,30 +1,66 @@
 import type { DecompressStreamActions, DecompressStreamCallbacks } from '../index.js';
+import { findBzip2BlockHits, makeBzip2BlockStream } from './bzip2Blocks.js';
 import decode from './bunzip.js';
-import kmpSearch, { buildKmpTable } from './kmpSearch.js';
+import { createParallelBzip2Decoder, decompressParallelWasm, type ParallelBzip2Options } from './parallelWasm.js';
+import { decompressWasmChunks } from './wasmBzip.js';
 
-interface DecompressionTask extends DecompressStreamCallbacks {
+const DEFAULT_STREAMING_CHUNK_SIZE = 500_000;
+const MAX_STREAMING_YIELDS = 32;
+
+interface DecompressStreamOptions extends DecompressStreamCallbacks, ParallelBzip2Options {
+  streamingChunkSize?: number;
+}
+
+type ParallelBzip2Decoder = NonNullable<Awaited<ReturnType<typeof createParallelBzip2Decoder>>>;
+
+interface DecompressionTask extends DecompressStreamOptions {
   id: number;
-  chunks: Uint8Array[];
-  header: Uint8Array;
-  magic: Uint8Array;
-  magicTable: number[];
+  compressedBytes: number;
+  compressedBuffer: Uint8Array;
+  compressedData: Uint8Array;
   cancelled: boolean;
+  blockStarts: number[];
+  blockStartSet: Set<number>;
+  decodedBlocks: Map<number, Uint8Array>;
+  decoder?: ParallelBzip2Decoder;
+  decoderPromise?: Promise<ParallelBzip2Decoder | undefined>;
+  decodeError?: Error;
+  emitQueue: Promise<void>;
+  eosBit?: number;
+  finalBlockIndex?: number;
+  inputDone: boolean;
+  nextBlockToDispatch: number;
+  nextBlockToEmit: number;
+  pendingDecodes: Promise<void>[];
   queue: Promise<void>;
+  scanStartByte: number;
+  streamingStarted: boolean;
+  streamYieldCount: number;
 }
 
 let currId = 0;
 
-const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamActions => {
+const decompressStream = (params: DecompressStreamOptions): DecompressStreamActions => {
   const id = currId++;
 
   const task: DecompressionTask = {
     id,
     ...params,
-    chunks: [],
-    header: Buffer.from([]),
-    magic: new Uint8Array(),
-    magicTable: [],
+    compressedBytes: 0,
+    compressedBuffer: new Uint8Array(),
+    compressedData: new Uint8Array(),
     cancelled: false,
+    blockStarts: [],
+    blockStartSet: new Set(),
+    decodedBlocks: new Map(),
+    emitQueue: Promise.resolve(),
+    inputDone: false,
+    nextBlockToDispatch: 0,
+    nextBlockToEmit: 0,
+    pendingDecodes: [],
+    scanStartByte: 4,
+    streamingStarted: false,
+    streamYieldCount: 0,
     queue: Promise.resolve()
   };
 
@@ -42,15 +78,176 @@ const decompressStream = (params: DecompressStreamCallbacks): DecompressStreamAc
     },
     cancel: () => {
       task.cancelled = true;
+      task.decoder?.terminate();
     }
   };
 };
 
-const concatUint8Arrays = (left: Uint8Array, right: Uint8Array) => {
-  const value = new Uint8Array(left.length + right.length);
-  value.set(left);
-  value.set(right, left.length);
-  return value;
+const decompressFull = async (chunks: Uint8Array[], compressedBytes: number) => {
+  for (const multiplier of [1.5, 2, 3, 4, 8, 16]) {
+    try {
+      return await decompressWasmChunks(chunks, compressedBytes, Math.ceil(compressedBytes * multiplier));
+    } catch (e) {
+      if (e instanceof Error && e.message === 'BZ_OUTBUFF_FULL') {
+        continue;
+      }
+
+      throw e;
+    }
+  }
+
+  throw new Error('BZ_OUTBUFF_FULL');
+};
+
+const appendCompressedData = (task: DecompressionTask, data: Uint8Array) => {
+  const nextLength = task.compressedBytes + data.byteLength;
+
+  if (task.compressedBuffer.byteLength < nextLength) {
+    const nextBuffer = new Uint8Array(Math.max(nextLength, task.compressedBuffer.byteLength * 2, data.byteLength));
+    nextBuffer.set(task.compressedData);
+    task.compressedBuffer = nextBuffer;
+  }
+
+  task.compressedBuffer.set(data, task.compressedBytes);
+  task.compressedBytes += data.byteLength;
+  task.compressedData = task.compressedBuffer.subarray(0, task.compressedBytes);
+};
+
+const scanBlockMarkers = (task: DecompressionTask) => {
+  if (task.compressedData.length < 10) {
+    return;
+  }
+
+  const hits = findBzip2BlockHits(task.compressedData, task.scanStartByte);
+
+  for (const hit of hits) {
+    if (hit.type === 'block') {
+      if (!task.blockStartSet.has(hit.bit)) {
+        task.blockStartSet.add(hit.bit);
+        task.blockStarts.push(hit.bit);
+      }
+    } else if (task.eosBit === undefined || hit.bit > task.eosBit) {
+      task.eosBit = hit.bit;
+    }
+  }
+
+  task.blockStarts.sort((left, right) => left - right);
+  task.scanStartByte = Math.max(4, task.compressedData.length - 12);
+};
+
+const flushDecodedBlocks = (task: DecompressionTask) => {
+  task.emitQueue = task.emitQueue.then(async () => {
+    while (!task.cancelled && task.decodedBlocks.has(task.nextBlockToEmit)) {
+      const index = task.nextBlockToEmit;
+      const data = task.decodedBlocks.get(index);
+
+      if (!data) {
+        return;
+      }
+
+      task.decodedBlocks.delete(index);
+      task.nextBlockToEmit++;
+      await task.onDecompressed(task.id, data, task.inputDone && index === task.finalBlockIndex);
+    }
+  });
+
+  return task.emitQueue;
+};
+
+const getDecoder = async (task: DecompressionTask) => {
+  task.decoderPromise ??= createParallelBzip2Decoder(async (index, data) => {
+    if (task.cancelled) {
+      return;
+    }
+
+    task.decodedBlocks.set(index, data);
+    await flushDecodedBlocks(task);
+  }, task).catch(() => undefined);
+
+  task.decoder = await task.decoderPromise;
+  return task.decoder;
+};
+
+const dispatchBlock = async (task: DecompressionTask, index: number, startBit: number, endBit: number) => {
+  const decoder = await getDecoder(task);
+
+  if (!decoder) {
+    return false;
+  }
+
+  const segment = makeBzip2BlockStream(task.compressedData, startBit, endBit);
+  const decode = decoder.enqueue(index, segment).catch((e) => {
+    task.decodeError = e instanceof Error ? e : new Error(String(e));
+  });
+
+  task.pendingDecodes.push(decode);
+  task.streamingStarted = true;
+  return true;
+};
+
+const dispatchClosedBlocks = async (task: DecompressionTask, includeFinalBlock: boolean) => {
+  while (task.nextBlockToDispatch + 1 < task.blockStarts.length) {
+    const index = task.nextBlockToDispatch;
+    const dispatched = await dispatchBlock(task, index, task.blockStarts[index], task.blockStarts[index + 1]);
+
+    if (!dispatched) {
+      return;
+    }
+
+    task.nextBlockToDispatch++;
+  }
+
+  if (includeFinalBlock && task.eosBit !== undefined && task.nextBlockToDispatch < task.blockStarts.length) {
+    const index = task.nextBlockToDispatch;
+    const dispatched = await dispatchBlock(task, index, task.blockStarts[index], task.eosBit);
+
+    if (dispatched) {
+      task.finalBlockIndex = index;
+      task.nextBlockToDispatch++;
+    }
+  }
+};
+
+const yieldToWorkerMessages = async (task: DecompressionTask) => {
+  if (
+    !task.streamingStarted ||
+    task.streamYieldCount >= MAX_STREAMING_YIELDS ||
+    task.nextBlockToDispatch - task.nextBlockToEmit < 8
+  ) {
+    return;
+  }
+
+  task.streamYieldCount++;
+
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+};
+
+const emitFallback = async (task: DecompressionTask, compressedData: Uint8Array) => {
+  let decompressedChunks: Uint8Array[];
+  let done = true;
+
+  const parallelChunks = await decompressParallelWasm(compressedData, task).catch(() => undefined);
+
+  try {
+    decompressedChunks = parallelChunks ?? [await decompressFull([compressedData], compressedData.byteLength)];
+  } catch {
+    const res = decode(compressedData, false);
+
+    if (!res) {
+      throw Error('Failed to decode');
+    }
+
+    decompressedChunks = [res.data];
+    done = res.done;
+  }
+
+  if (!task.cancelled) {
+    for (let i = 0; i < decompressedChunks.length; i++) {
+      await task.onDecompressed(task.id, decompressedChunks[i], done && i === decompressedChunks.length - 1);
+    }
+  }
 };
 
 const processCompressedData = async (task: DecompressionTask, data: Uint8Array, isDone: boolean) => {
@@ -59,79 +256,44 @@ const processCompressedData = async (task: DecompressionTask, data: Uint8Array, 
   }
 
   try {
-    const { chunks } = task;
-    let { header, magic } = task;
+    if (data.byteLength) {
+      const streamingChunkSize = Math.max(64 * 1024, task.streamingChunkSize ?? DEFAULT_STREAMING_CHUNK_SIZE);
 
-    let compressedData: Buffer;
-
-    if (isDone) {
-      // If isDone is true, it means data is empty, just decompress what's left in the chunks
-      compressedData = Buffer.concat([header, ...chunks]);
-    } else {
-      let newMagicIndex = -1;
-      let isFirst = false;
-
-      if (!header.length && data.byteLength > 0) {
-        task.header = header = data.subarray(0, 4);
-        task.magic = magic = data.subarray(4, 10);
-        task.magicTable = buildKmpTable(magic);
-        data = data.subarray(4);
-        isFirst = true;
+      for (let offset = 0; offset < data.byteLength; offset += streamingChunkSize) {
+        appendCompressedData(task, data.subarray(offset, Math.min(offset + streamingChunkSize, data.byteLength)));
+        scanBlockMarkers(task);
+        await dispatchClosedBlocks(task, false);
+        await yieldToWorkerMessages(task);
       }
-
-      // Find the magic number in the current block
-      // If this is the first chunk, we skip the first byte to not match the magic number in the first block
-      newMagicIndex = kmpSearch(data, magic, task.magicTable, isFirst);
-
-      if (newMagicIndex === -1 && chunks.length > 0) {
-        // If we didn't find the magic number, try to combine the last chunk with the current one
-        // This is to handle the case where the magic number is split between 2 blocks
-        const magicLength = magic.length;
-        const lastChunk = chunks[chunks.length - 1];
-
-        // To optimize, we slice potentialMagicData to only contain (magicLength - 1) from each of its parts (the last chunk and the current one)
-        // It will have a final size of (magicLength * 2 - 2)
-        const potentialMagicData = concatUint8Arrays(
-          lastChunk.subarray(lastChunk.length - (magicLength - 1)),
-          data.subarray(0, magicLength - 1)
-        );
-
-        newMagicIndex = kmpSearch(potentialMagicData, magic, task.magicTable, false);
-
-        if (newMagicIndex !== -1) {
-          // Concat the last chunk with the current one
-          const newValue = concatUint8Arrays(lastChunk, data);
-
-          // Fix newMagicIndex to be relative to the beginning of lastChunk
-          newMagicIndex += lastChunk.length - (magicLength - 1);
-
-          // If we found the magic number, replace the last chunk with the new value
-          data = newValue;
-          chunks.pop();
-        }
-      }
-
-      if (newMagicIndex === -1) {
-        chunks.push(data);
-        return;
-      }
-
-      const newBlockData = data.subarray(0, newMagicIndex);
-      compressedData = Buffer.concat([header, ...chunks, newBlockData]) as Buffer;
-
-      const newNextBlockData = data.subarray(newMagicIndex);
-      task.chunks = [newNextBlockData];
     }
 
-    const res = decode(compressedData, false);
-
-    if (!res) {
-      throw Error('Failed to decode');
+    if (!isDone) {
+      return;
     }
 
-    if (!task.cancelled) {
-      await task.onDecompressed(task.id, res.data, res.done);
+    scanBlockMarkers(task);
+    await dispatchClosedBlocks(task, true);
+
+    if (task.streamingStarted) {
+      task.inputDone = true;
+      await Promise.all(task.pendingDecodes);
+
+      if (task.decodeError) {
+        throw task.decodeError;
+      }
+
+      await flushDecodedBlocks(task);
+      await task.emitQueue;
+      await task.decoder?.finish();
+
+      if (task.finalBlockIndex === undefined) {
+        throw Error('Failed to find final bzip2 block');
+      }
+
+      return;
     }
+
+    await emitFallback(task, task.compressedData);
   } catch (e) {
     if (task.cancelled) {
       return;
@@ -146,6 +308,10 @@ const processCompressedData = async (task: DecompressionTask, data: Uint8Array, 
     }
 
     await task.onError(task.id, errStr);
+  } finally {
+    if (isDone || task.cancelled) {
+      task.decoder?.terminate();
+    }
   }
 };
 
