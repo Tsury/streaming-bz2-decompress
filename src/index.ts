@@ -2,7 +2,6 @@ import type { DecompressStreamActions, DecompressStreamCallbacks } from '../inde
 import { findBzip2BlockHits, makeBzip2BlockStream } from './bzip2Blocks.js';
 import decode from './bunzip.js';
 import { createParallelBzip2Decoder, decompressParallelWasm, type ParallelBzip2Options } from './parallelWasm.js';
-import { decompressWasmChunks } from './wasmBzip.js';
 
 const DEFAULT_STREAMING_CHUNK_SIZE = 500_000;
 const MAX_STREAMING_YIELDS = 32;
@@ -84,6 +83,8 @@ const decompressStream = (params: DecompressStreamOptions): DecompressStreamActi
 };
 
 const decompressFull = async (chunks: Uint8Array[], compressedBytes: number) => {
+  const { decompressWasmChunks } = await import('./wasmBzip.js');
+
   for (const multiplier of [1.5, 2, 3, 4, 8, 16]) {
     try {
       return await decompressWasmChunks(chunks, compressedBytes, Math.ceil(compressedBytes * multiplier));
